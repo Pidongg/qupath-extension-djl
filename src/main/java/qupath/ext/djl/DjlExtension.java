@@ -68,7 +68,7 @@ public class DjlExtension implements QuPathExtension, GitHubProject {
 
 	@Override
 	public String getName() {
-		return "Deep Java Library extension";
+		return "Deep Java Library extension - custom";
 	}
 
 	@Override
@@ -78,7 +78,7 @@ public class DjlExtension implements QuPathExtension, GitHubProject {
 
 	@Override
 	public GitHubRepo getRepository() {
-		return GitHubRepo.create(getName(), "qupath", "qupath-extension-djl");
+		return GitHubRepo.create(getName(), "Pidongg", "qupath-extension-djl");
 	}
 	
 	@Override
