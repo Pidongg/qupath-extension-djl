@@ -73,7 +73,7 @@ public class DjlEngineCommand {
 	
 	private static final Logger logger = LoggerFactory.getLogger(DjlEngineCommand.class);
 	
-	private static final String TITLE = "Deep Java Library engines";
+	private static final String TITLE = "Deep Java Library engines - CUSTOM IMPLEMENTATION";
 	
 	private QuPathGUI qupath;
 
