@@ -6,7 +6,6 @@ import static qupath.lib.scripting.QP.*
 
 // Create pipeline for the translator
 def pipeline = new Pipeline()
-        // .add(new Resize(640, 640))
         .add(new ToTensor())
 
 // Create translator
@@ -20,18 +19,21 @@ def modelFile = new File('C:/Users/peiya/Downloads/train26/weights/best.torchscr
 def modelUri = modelFile.toURI()
 
 // Create detector with input size 640
-def detector = new DjlObjectDetector("PyTorch", modelUri, translator, 640)
+def detector = new DjlObjectDetector("PyTorch", modelUri, translator, 640, 0.0)
 
 try {
-    // Clear existing objects
-    clearAllObjects()
+    // Get the selected object
+    def selected = getSelectedObject()
+    if (selected == null) {
+        print("Please select an annotation first!")
+        return
+    }
+
+    // Clear child objects of the selected annotation
+    clearDetections()
     
-    // Run detection on current image
-    def detections = detector.detect(getCurrentImageData())
-    
-} catch (Exception e) {
-    print "Error: ${e.getMessage()}"
-    e.printStackTrace()
+    // Run detection only on the selected annotation
+    def detections = detector.detect(getCurrentImageData(), [selected])
 } finally {
     detector.close()
 }

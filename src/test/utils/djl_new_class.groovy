@@ -6,40 +6,43 @@ import static qupath.lib.scripting.QP.*
 
 // Create pipeline for the translator
 def pipeline = new Pipeline()
-//        .add(new Resize(640, 640))
         .add(new ToTensor())
 
 // Create translator
 def translator = new YoloV8Translator.Builder()
         .setPipeline(pipeline)
-        .optThreshold(0.5f)
+        .optThreshold(0.24f)
         .build()
 
 // Create file URI for the model
-def modelFile = new File('C:/Users/peiya/Downloads/train26/weights/best.torchscript')
+def modelFile = new File("C:/Users/peiya/Desktop/train16/weights/best.torchscript")
 def modelUri = modelFile.toURI()
 
-// Create detector with input size 640 and 20% overlap between tiles
-def detector = new DjlObjectDetector("PyTorch", modelUri, translator, 640, 0.0)
+// Create detector with input size 640, overlap percentage between adjacent tiles 0, iou threshold 0.45
+def detector = new DjlObjectDetector("PyTorch", modelUri, translator, 640, 0.0, 0.45)
 
 try {
-    // Store existing annotations
-    def annotations = getAnnotationObjects()
-    
-    // Clear only detections, not annotations
+    // Clear existing detections
     clearDetections()
     
-    // Run detection within annotations (if any exist), otherwise run on whole image
-    def detections
-    if (!annotations.isEmpty()) {
-        detections = detector.detect(getCurrentImageData(), annotations)
-    } else {
-        detections = detector.detect(getCurrentImageData())
+    // Get selected annotations
+    def selectedAnnotations = getSelectedObjects()
+    
+    // If no annotations selected, show warning
+    if (selectedAnnotations.isEmpty()) {
+        print("No annotations selected! Please select one or more annotations.")
+        return
     }
     
-} catch (Exception e) {
-    print "Error: ${e.getMessage()}"
-    e.printStackTrace()
+    // Run detection only on selected annotations
+    def detections = detector.detect(getCurrentImageData(), selectedAnnotations)
+    
+    if (detections.isPresent()) {
+        print("Detection completed with ${detections.get().size()} objects found")
+    } else {
+        print("Detection was interrupted")
+    }
+    
 } finally {
     detector.close()
 }
