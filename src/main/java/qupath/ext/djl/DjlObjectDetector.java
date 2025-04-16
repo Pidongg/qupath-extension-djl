@@ -6,6 +6,7 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -46,6 +47,8 @@ public class DjlObjectDetector implements AutoCloseable {
     private int inputSize;
     private double overlapPercentage;
     private double nmsThreshold;
+    private ConcurrentHashMap<String, Double> classThresholds;
+    private double defaultConfidenceThreshold;
     
     /**
      * Create a new DjlObjectDetector.
@@ -79,14 +82,69 @@ public class DjlObjectDetector implements AutoCloseable {
      */
     public DjlObjectDetector(String engine, URI modelUri, Translator<Image, DetectedObjects> translator, int inputSize, double overlapPercentage, double nmsThreshold) 
             throws ModelNotFoundException, MalformedModelException, IOException {
+        this(engine, modelUri, translator, inputSize, overlapPercentage, nmsThreshold, 0.25);
+    }
+    
+    /**
+     * Create a new DjlObjectDetector with custom NMS threshold and default confidence threshold.
+     * 
+     * @param engine the DJL engine to use (e.g. "PyTorch", "TensorFlow")
+     * @param modelUri the URI to the model file
+     * @param translator the custom translator to use for the model
+     * @param inputSize the expected input size for the model (e.g. 640 for YOLOv8)
+     * @param overlapPercentage the percentage of overlap between tiles (0.0 to 1.0)
+     * @param nmsThreshold the threshold for Non-Maximum Suppression (0.0 to 1.0)
+     * @param defaultConfidenceThreshold the default confidence threshold to apply to all classes
+     * @throws ModelNotFoundException
+     * @throws MalformedModelException
+     * @throws IOException
+     */
+    public DjlObjectDetector(String engine, URI modelUri, Translator<Image, DetectedObjects> translator, 
+                            int inputSize, double overlapPercentage, double nmsThreshold, 
+                            double defaultConfidenceThreshold) 
+            throws ModelNotFoundException, MalformedModelException, IOException {
         this.engine = engine;
         this.modelUri = modelUri;
         this.translator = translator;
         this.inputSize = inputSize;
         this.overlapPercentage = Math.min(Math.max(overlapPercentage, 0.0), 1.0);
         this.nmsThreshold = Math.min(Math.max(nmsThreshold, 0.0), 1.0);
+        this.defaultConfidenceThreshold = Math.min(Math.max(defaultConfidenceThreshold, 0.0), 1.0);
+        this.classThresholds = new ConcurrentHashMap<>();
         initializeModel();
         System.setProperty("logging.level.qupath.ext.djl", "DEBUG");
+    }
+    
+    /**
+     * Set a custom confidence threshold for a specific class.
+     * 
+     * @param className the name of the class
+     * @param threshold the confidence threshold value (0.0 to 1.0)
+     */
+    public void setClassThreshold(String className, double threshold) {
+        double validThreshold = Math.min(Math.max(threshold, 0.0), 1.0);
+        classThresholds.put(className, validThreshold);
+        logger.debug("Set confidence threshold for class '{}' to {}", className, validThreshold);
+    }
+    
+    /**
+     * Remove custom threshold for a specific class. The default threshold will be used instead.
+     * 
+     * @param className the name of the class
+     */
+    public void removeClassThreshold(String className) {
+        classThresholds.remove(className);
+        logger.debug("Removed custom threshold for class '{}'", className);
+    }
+    
+    /**
+     * Set the default confidence threshold for all classes that don't have a specific threshold.
+     * 
+     * @param threshold the confidence threshold value (0.0 to 1.0)
+     */
+    public void setDefaultConfidenceThreshold(double threshold) {
+        this.defaultConfidenceThreshold = Math.min(Math.max(threshold, 0.0), 1.0);
+        logger.debug("Set default confidence threshold to {}", defaultConfidenceThreshold);
     }
     
     private void initializeModel() throws ModelNotFoundException, MalformedModelException, IOException {
@@ -324,7 +382,19 @@ public class DjlObjectDetector implements AutoCloseable {
         
         // Apply NMS for each class separately
         for (var entry : detectionsByClass.entrySet()) {
+            var className = entry.getKey();
             var classDetections = entry.getValue();
+            
+            // Apply per-class confidence threshold filtering
+            double confidenceThreshold = classThresholds.getOrDefault(className, defaultConfidenceThreshold);
+            classDetections = classDetections.stream()
+                .filter(d -> d.getProbability() >= confidenceThreshold)
+                .collect(Collectors.toList());
+            
+            if (classDetections.isEmpty()) {
+                logger.debug("All detections for class '{}' were below threshold {}", className, confidenceThreshold);
+                continue;
+            }
             
             // Sort by confidence
             classDetections.sort((a, b) -> Double.compare(b.getProbability(), a.getProbability()));
@@ -422,9 +492,10 @@ public class DjlObjectDetector implements AutoCloseable {
         double downsampleBase = server.getDownsampleForResolution(0);
         
         var map = new ConcurrentHashMap<PathObject, List<PathObject>>();
-        var list = new ArrayList<PathObject>();
+        var allDetections = new ArrayList<PathObject>();
         Set<RegionRequest> processedRegions = ConcurrentHashMap.newKeySet();
         
+        // First pass: detect objects in each parent region
         for (var parent : parentObjects) {
             parent.clearChildObjects();
                 
@@ -438,8 +509,7 @@ public class DjlObjectDetector implements AutoCloseable {
                     (int)roi.getBoundsX(), (int)roi.getBoundsY(), 
                     (int)roi.getBoundsWidth(), (int)roi.getBoundsHeight());
 
-            var childObjects = map.computeIfAbsent(parent, p -> new ArrayList<>());
-            List<PathObject> allTileDetections = new ArrayList<>();
+            List<PathObject> parentDetections = new ArrayList<>();
                 
             // Process each tile individually
             for (var request : requests) {
@@ -450,7 +520,7 @@ public class DjlObjectDetector implements AutoCloseable {
                 processedRegions.add(request);
                 
                 if (Thread.currentThread().isInterrupted()) {
-                    logger.warn("Detection interrupted! Discarding {} detection(s)", list.size());
+                    logger.warn("Detection interrupted! Discarding {} detection(s)", allDetections.size());
                     return Optional.empty();
                 }
                     
@@ -460,26 +530,46 @@ public class DjlObjectDetector implements AutoCloseable {
                 try(var predictor = model.newPredictor()) {
                     var detections = predictor.predict(djlImage);
                     // Apply NMS directly to raw detections
-                    allTileDetections.addAll(applyNMS(detections.items(), request));
+                    parentDetections.addAll(applyNMS(detections.items(), request));
                 }
             }
-                
-            // Merge overlapping detections
-            var mergedDetections = mergeOverlappingDetections(allTileDetections);
-            childObjects.addAll(mergedDetections);
-            list.addAll(mergedDetections);
+            
+            // Store all detections with their parent
+            map.put(parent, parentDetections);
+            allDetections.addAll(parentDetections);
         }
         
-        // Update hierarchy
-        for (var entry : map.entrySet()) {
-            var parent = entry.getKey();
-            var childObjects = entry.getValue();
+        // Second pass: merge all overlapping detections across all parents
+        List<PathObject> mergedDetections = mergeOverlappingDetections(allDetections);
+        
+        // Third pass: assign merged detections back to appropriate parents
+        // Set to track which detections have been included in finalResults
+        Set<PathObject> processedDetections = new HashSet<>();
+        var finalResults = new ArrayList<PathObject>();
+        
+        for (var parent : parentObjects) {
+            var roi = parent.getROI();
+            List<PathObject> childObjects = new ArrayList<>();
+            
+            // For each merged detection, check if it belongs to this parent
+            for (var detection : mergedDetections) {
+                if (roi.contains(detection.getROI().getBoundsX(), detection.getROI().getBoundsY())) {
+                    childObjects.add(detection);
+                    // Only add to finalResults if not already processed
+                    if (!processedDetections.contains(detection)) {
+                        finalResults.add(detection);
+                        processedDetections.add(detection);
+                    }
+                }
+            }
+            
+            // Update parent with its children
             parent.clearChildObjects();
             parent.addChildObjects(childObjects);
         }
         
         imageData.getHierarchy().fireHierarchyChangedEvent(this);
-        return Optional.of(list);
+        return Optional.of(finalResults);
     }
 
     @Override
