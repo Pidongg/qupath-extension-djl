@@ -6,11 +6,11 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -31,23 +31,16 @@ import qupath.lib.objects.PathObjects;
 import qupath.lib.objects.classes.PathClass;
 import qupath.lib.regions.RegionRequest;
 import qupath.lib.roi.ROIs;
+import org.locationtech.jts.geom.Geometry;
 
-/**
- * Helper class for object detection using Deep Java Library with custom translators.
- * 
- * @author Your Name
- */
 public class DjlObjectDetector implements AutoCloseable {
     
     private static final Logger logger = LoggerFactory.getLogger(DjlObjectDetector.class);
     private ZooModel<Image, DetectedObjects> model;
-    private String engine;
-    private URI modelUri;
-    private Translator<Image, DetectedObjects> translator;
     private int inputSize;
     private double overlapPercentage;
-    private double nmsThreshold;
-    private ConcurrentHashMap<String, Double> classThresholds;
+    private double iouThreshold;
+    private HashMap<String, Double> confidenceThresholds;
     private double defaultConfidenceThreshold;
     
     /**
@@ -55,34 +48,16 @@ public class DjlObjectDetector implements AutoCloseable {
      * 
      * @param engine the DJL engine to use (e.g. "PyTorch", "TensorFlow")
      * @param modelUri the URI to the model file
-     * @param translator the custom translator to use for the model
      * @param inputSize the expected input size for the model (e.g. 640 for YOLOv8)
      * @param overlapPercentage the percentage of overlap between tiles (0.0 to 1.0)
+     * @param iouThreshold the threshold for Non-Maximum Suppression (0.0 to 1.0)
      * @throws ModelNotFoundException
      * @throws MalformedModelException
      * @throws IOException
      */
-    public DjlObjectDetector(String engine, URI modelUri, Translator<Image, DetectedObjects> translator, int inputSize, double overlapPercentage) 
+    public DjlObjectDetector(String engine, URI modelUri, Translator<Image, DetectedObjects> translator, int inputSize, double overlapPercentage, double iouThreshold) 
             throws ModelNotFoundException, MalformedModelException, IOException {
-        this(engine, modelUri, translator, inputSize, overlapPercentage, 0.45);
-    }
-    
-    /**
-     * Create a new DjlObjectDetector with custom NMS threshold.
-     * 
-     * @param engine the DJL engine to use (e.g. "PyTorch", "TensorFlow")
-     * @param modelUri the URI to the model file
-     * @param translator the custom translator to use for the model
-     * @param inputSize the expected input size for the model (e.g. 640 for YOLOv8)
-     * @param overlapPercentage the percentage of overlap between tiles (0.0 to 1.0)
-     * @param nmsThreshold the threshold for Non-Maximum Suppression (0.0 to 1.0)
-     * @throws ModelNotFoundException
-     * @throws MalformedModelException
-     * @throws IOException
-     */
-    public DjlObjectDetector(String engine, URI modelUri, Translator<Image, DetectedObjects> translator, int inputSize, double overlapPercentage, double nmsThreshold) 
-            throws ModelNotFoundException, MalformedModelException, IOException {
-        this(engine, modelUri, translator, inputSize, overlapPercentage, nmsThreshold, 0.25);
+        this(engine, modelUri, translator, inputSize, overlapPercentage, iouThreshold, 0.25);
     }
     
     /**
@@ -90,28 +65,24 @@ public class DjlObjectDetector implements AutoCloseable {
      * 
      * @param engine the DJL engine to use (e.g. "PyTorch", "TensorFlow")
      * @param modelUri the URI to the model file
-     * @param translator the custom translator to use for the model
      * @param inputSize the expected input size for the model (e.g. 640 for YOLOv8)
      * @param overlapPercentage the percentage of overlap between tiles (0.0 to 1.0)
-     * @param nmsThreshold the threshold for Non-Maximum Suppression (0.0 to 1.0)
+     * @param iouThreshold the threshold for Non-Maximum Suppression (0.0 to 1.0)
      * @param defaultConfidenceThreshold the default confidence threshold to apply to all classes
      * @throws ModelNotFoundException
      * @throws MalformedModelException
      * @throws IOException
      */
     public DjlObjectDetector(String engine, URI modelUri, Translator<Image, DetectedObjects> translator, 
-                            int inputSize, double overlapPercentage, double nmsThreshold, 
+                            int inputSize, double overlapPercentage, double iouThreshold, 
                             double defaultConfidenceThreshold) 
             throws ModelNotFoundException, MalformedModelException, IOException {
-        this.engine = engine;
-        this.modelUri = modelUri;
-        this.translator = translator;
         this.inputSize = inputSize;
         this.overlapPercentage = Math.min(Math.max(overlapPercentage, 0.0), 1.0);
-        this.nmsThreshold = Math.min(Math.max(nmsThreshold, 0.0), 1.0);
+        this.iouThreshold = Math.min(Math.max(iouThreshold, 0.0), 1.0);
         this.defaultConfidenceThreshold = Math.min(Math.max(defaultConfidenceThreshold, 0.0), 1.0);
-        this.classThresholds = new ConcurrentHashMap<>();
-        initializeModel();
+        this.confidenceThresholds = new HashMap<>();
+        initializeModel(modelUri, engine, translator);
         System.setProperty("logging.level.qupath.ext.djl", "DEBUG");
     }
     
@@ -123,7 +94,7 @@ public class DjlObjectDetector implements AutoCloseable {
      */
     public void setClassThreshold(String className, double threshold) {
         double validThreshold = Math.min(Math.max(threshold, 0.0), 1.0);
-        classThresholds.put(className, validThreshold);
+        confidenceThresholds.put(className, validThreshold);
         logger.debug("Set confidence threshold for class '{}' to {}", className, validThreshold);
     }
     
@@ -133,7 +104,7 @@ public class DjlObjectDetector implements AutoCloseable {
      * @param className the name of the class
      */
     public void removeClassThreshold(String className) {
-        classThresholds.remove(className);
+        confidenceThresholds.remove(className);
         logger.debug("Removed custom threshold for class '{}'", className);
     }
     
@@ -147,7 +118,7 @@ public class DjlObjectDetector implements AutoCloseable {
         logger.debug("Set default confidence threshold to {}", defaultConfidenceThreshold);
     }
     
-    private void initializeModel() throws ModelNotFoundException, MalformedModelException, IOException {
+    private void initializeModel(URI modelUri, String engine, Translator<Image, DetectedObjects> translator) throws ModelNotFoundException, MalformedModelException, IOException {
         if (model != null)
             return;
             
@@ -158,8 +129,6 @@ public class DjlObjectDetector implements AutoCloseable {
             translator,
             modelUri
         );
-        
-        logger.info("Model loaded successfully from {}", modelUri);
     }
 
 
@@ -187,13 +156,17 @@ public class DjlObjectDetector implements AutoCloseable {
         qupath.lib.roi.interfaces.ROI roi1 = obj1.getROI();
         qupath.lib.roi.interfaces.ROI roi2 = obj2.getROI();
         
-        // First do a quick bounds check (optimization)
-        if (!roi1.getGeometry().getBoundary().intersects(roi2.getGeometry().getBoundary())) {
+        // Calculate IoU (Intersection over Union)
+        var intersection = roi1.getGeometry().intersection(roi2.getGeometry());
+        if (intersection.isEmpty())
             return false;
-        }
         
-        // Then do precise geometry intersection
-        return roi1.getGeometry().intersects(roi2.getGeometry());
+        double intersectionArea = intersection.getArea();
+        double unionArea = roi1.getArea() + roi2.getArea() - intersectionArea;
+        double iou = intersectionArea / unionArea;
+        
+        // Only consider as overlapping if IoU exceeds threshold
+        return iou > iouThreshold;
     }
     
     /**
@@ -373,7 +346,7 @@ public class DjlObjectDetector implements AutoCloseable {
     }
 
     private List<PathObject> applyNMS(List<DetectedObject> detections, RegionRequest request) {
-        final double NMS_THRESHOLD = nmsThreshold;
+        final double NMS_THRESHOLD = iouThreshold;
         List<PathObject> result = new ArrayList<>();
         
         // Group detections by class
@@ -386,7 +359,7 @@ public class DjlObjectDetector implements AutoCloseable {
             var classDetections = entry.getValue();
             
             // Apply per-class confidence threshold filtering
-            double confidenceThreshold = classThresholds.getOrDefault(className, defaultConfidenceThreshold);
+            double confidenceThreshold = confidenceThresholds.getOrDefault(className, defaultConfidenceThreshold);
             classDetections = classDetections.stream()
                 .filter(d -> d.getProbability() >= confidenceThreshold)
                 .collect(Collectors.toList());
@@ -451,7 +424,7 @@ public class DjlObjectDetector implements AutoCloseable {
         return result;
     }
 
-    private boolean isRegionOverlapping(RegionRequest request, Set<RegionRequest> processedRegions) {
+    private boolean isRegionProcessed(RegionRequest request, Set<RegionRequest> processedRegions) {
         for (RegionRequest processed : processedRegions) {
             if (request.getX() >= processed.getX() && 
                 request.getY() >= processed.getY() &&
@@ -491,9 +464,29 @@ public class DjlObjectDetector implements AutoCloseable {
         var server = imageData.getServer();
         double downsampleBase = server.getDownsampleForResolution(0);
         
-        var map = new ConcurrentHashMap<PathObject, List<PathObject>>();
+        var map = new HashMap<PathObject, List<PathObject>>();
         var allDetections = new ArrayList<PathObject>();
-        Set<RegionRequest> processedRegions = ConcurrentHashMap.newKeySet();
+        Set<RegionRequest> processedRegions = new HashSet<>();
+        
+        // First create combined area of all parent ROIs
+        Geometry combinedArea = null;
+        for (var parent : parentObjects) {
+            var roi = parent.getROI();
+            if (roi == null) {
+                continue;
+            }
+            
+            if (combinedArea == null) {
+                combinedArea = roi.getGeometry();
+            } else {
+                combinedArea = combinedArea.union(roi.getGeometry());
+            }
+        }
+        
+        // If no valid ROIs found, throw exception
+        if (combinedArea == null) {
+            throw new IllegalArgumentException("No valid ROIs in parent objects");
+        }
         
         // First pass: detect objects in each parent region
         for (var parent : parentObjects) {
@@ -513,7 +506,7 @@ public class DjlObjectDetector implements AutoCloseable {
                 
             // Process each tile individually
             for (var request : requests) {
-                if (isRegionOverlapping(request, processedRegions)) {
+                if (isRegionProcessed(request, processedRegions)) {
                     logger.debug("Skipping overlapping region at {},{}", request.getX(), request.getY());
                     continue;
                 }
@@ -542,6 +535,14 @@ public class DjlObjectDetector implements AutoCloseable {
         // Second pass: merge all overlapping detections across all parents
         List<PathObject> mergedDetections = mergeOverlappingDetections(allDetections);
         
+        // Filter out detections that are not within the combined area
+        List<PathObject> filteredDetections = new ArrayList<>();
+        for (var detection : mergedDetections) {
+            if (combinedArea.contains(detection.getROI().getGeometry())) {
+                filteredDetections.add(detection);
+            }
+        }
+        
         // Third pass: assign merged detections back to appropriate parents
         // Set to track which detections have been included in finalResults
         Set<PathObject> processedDetections = new HashSet<>();
@@ -551,9 +552,11 @@ public class DjlObjectDetector implements AutoCloseable {
             var roi = parent.getROI();
             List<PathObject> childObjects = new ArrayList<>();
             
-            // For each merged detection, check if it belongs to this parent
-            for (var detection : mergedDetections) {
-                if (roi.contains(detection.getROI().getBoundsX(), detection.getROI().getBoundsY())) {
+            // For each filtered detection, check if it overlaps with this parent
+            for (var detection : filteredDetections) {
+                var detectionRoi = detection.getROI();
+                // Add to this parent if the detection overlaps with the parent ROI
+                if (detectionRoi.getGeometry().intersects(roi.getGeometry())) {
                     childObjects.add(detection);
                     // Only add to finalResults if not already processed
                     if (!processedDetections.contains(detection)) {
