@@ -17,6 +17,7 @@ gradle.properties
 build/
 .gradle/
 gradle.properties
+build.gradle.kts
 
 # Eclipse
 .settings/
@@ -36,3 +37,4 @@ hs_err*.log
 *~.nib
 *thumbs.db
 bin/
+.vscode
