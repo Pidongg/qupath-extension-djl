@@ -1,0 +1,105 @@
+[33mcommit 61af1d0ff4cc8c95af4b7a98039fb7fab1acf27d[m
+Author: Pidongg <graciepy1@gmail.com>
+Date:   Sat Apr 19 21:21:52 2025 +0100
+
+    refactoring
+
+ src/main/java/qupath/ext/djl/DjlTools.java | 1422 [32m++++++++++++++[m[31m--------------[m
+ 1 file changed, 707 insertions(+), 715 deletions(-)
+
+[33mcommit f2e5ab06895baaa7fe3f2ba926010f633fe52511[m
+Author: petebankhead <pete.bankhead@gmail.com>
+Date:   Mon Dec 23 13:01:38 2024 +0000
+
+    Faster Mat to NDArray channels-first conversion
+
+ src/main/java/qupath/ext/djl/DjlTools.java | 12 [32m++++++++[m[31m----[m
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+[33mcommit d2203e00b38d63e6d9a1cd5425b707f6935accbf[m
+Author: Pete <pete.bankhead@gmail.com>
+Date:   Fri Sep 6 07:21:36 2024 +0100
+
+    Update for Java 21, fix MPS bug
+    
+    Update gradle and require Java 21, so we can use QuPath v0.6 dependencies.
+    Also fix `DjlTools.getDoubles` to avoid converting to float64 on device, which was problematic on MPS.
+
+ src/main/java/qupath/ext/djl/DjlTools.java | 9 [32m++++++++[m[31m-[m
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+[33mcommit 26bb25e4ce1a3c06a65aa94dc5ec3d09c07e8060[m
+Author: Alan O'Callaghan <alan.ocallaghan@outlook.com>
+Date:   Wed May 1 00:00:19 2024 +0100
+
+     Switch to domain named prop and fix tensorflow toString issue
+
+ src/main/java/qupath/ext/djl/DjlTools.java | 13 [32m++++++[m[31m-------[m
+ 1 file changed, 6 insertions(+), 7 deletions(-)
+
+[33mcommit 99fc3b46b7d61c530c84e425e8c044caba738618[m
+Author: Pete <pete.bankhead@gmail.com>
+Date:   Fri Nov 17 14:33:11 2023 +0000
+
+    Externalize more strings
+
+ src/main/java/qupath/ext/djl/DjlTools.java | 17 [32m++[m[31m---------------[m
+ 1 file changed, 2 insertions(+), 15 deletions(-)
+
+[33mcommit 8a317a0d93cc4c213097c9c605e2d0d0bffed8df[m
+Author: Pete <pete.bankhead@gmail.com>
+Date:   Mon Nov 13 18:25:15 2023 +0000
+
+    Remove DnnModel generic parameter
+    
+    For use with https://github.com/qupath/qupath/pull/1422
+    The purpose is to simplify wrapping around a `Predictor` and achieve better memory management. Using `NDList` proved more complicated than expected, since things are easier when using a `Translator` - see https://github.com/deepjavalibrary/djl/blob/v0.24.0/docs/development/memory_management.md#inference-use-case
+
+ src/main/java/qupath/ext/djl/DjlTools.java | 21 [32m++++++++++++++[m[31m-------[m
+ 1 file changed, 14 insertions(+), 7 deletions(-)
+
+[33mcommit 6fff181533f0cdf5a0d12814ea1ed3a87038e3fc[m
+Author: Pete <pete.bankhead@gmail.com>
+Date:   Thu Jul 20 16:48:57 2023 +0100
+
+    Add get/setOverrideDevice() method
+    
+    * New `DjlTools.get/setOverrideDevice()` methods to override DJL's default device selection
+      * Primarily intended to explore `Device.fromName('mps')` on Apple Silicon (which sometimes works, sometimes doesn't...)
+
+ src/main/java/qupath/ext/djl/DjlTools.java | 59 [32m++++++++++++++++++++++++++[m[31m----[m
+ 1 file changed, 52 insertions(+), 7 deletions(-)
+
+[33mcommit 891122936a50d2ae9a0ae5c53aa7e9e7507a022f[m
+Author: Pete <pete.bankhead@gmail.com>
+Date:   Thu Jul 20 16:05:06 2023 +0100
+
+    Bug fixes, improved NDArray conversion
+    
+    * Improve conversion of `NDArray` to more data types
+      * Add `DjlTools.getXXX()` methods to get ints, floats, doubles, longs and booleans
+    * Estimate output size in `DjlDnnModel` if shape doesn't match NDLayout
+      * This relaxes the assumption that the output layout should match the input
+
+ src/main/java/qupath/ext/djl/DjlTools.java | 110 [32m++++++++++++++++++++++++++[m[31m---[m
+ 1 file changed, 100 insertions(+), 10 deletions(-)
+
+[33mcommit d12e6ca0ec2ad8a9cc0822b39e4ed4e1fc1a5759[m
+Author: pete <pete.bankhead@gmail.com>
+Date:   Thu Dec 1 09:09:26 2022 +0000
+
+    Improve engine checks
+    
+    And (hopefully) fix issue with TensorFlow not loading properly if JavaCPP's Loader had already been used
+
+ src/main/java/qupath/ext/djl/DjlTools.java | 53 [32m++++++++++++++++++++++++++++[m[31m--[m
+ 1 file changed, 50 insertions(+), 3 deletions(-)
+
+[33mcommit 19c295c989a2c8076f07302d57de586968e53815[m
+Author: Pete <pete.bankhead@gmail.com>
+Date:   Tue Nov 29 11:00:33 2022 +0000
+
+    Initial commit
+
+ src/main/java/qupath/ext/djl/DjlTools.java | 545 [32m+++++++++++++++++++++++++++++[m
+ 1 file changed, 545 insertions(+)
