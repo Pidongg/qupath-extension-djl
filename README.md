@@ -4,7 +4,9 @@
 [![Downloads (all releases)](https://img.shields.io/github/downloads/qupath/qupath-extension-djl/total)](https://github.com/qupath/qupath-extension-djl/releases)
 
 # QuPath Deep Java Library extension
+This is a fork with changes to add custom model inference, tiling and detections merging functionalities to QuPath.
 
+# Original README
 A QuPath extension for working with Deep Java Library (https://djl.ai)
 
 ## Download
